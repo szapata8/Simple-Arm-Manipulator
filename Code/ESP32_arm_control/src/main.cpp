@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <ESP32Servo.h>
 
-#define SERVO_AMOUNT 4
+#define SERVO_AMOUNT 5
 
 const int Q_LENGH = SERVO_AMOUNT;
 const int MIN_MICROSECONDS = 550; // By the book is supposed to be 500, the values being set are a result of experimental tests from the author of the library
