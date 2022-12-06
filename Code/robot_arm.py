@@ -4,6 +4,8 @@ import serial.tools.list_ports
 import serial.serialutil
 import time
 from numpy import sin, cos
+import pandas as pd
+from scipy import signal
 
 eye = np.eye(4)
 pi = np.pi
@@ -308,125 +310,151 @@ class RobotArm:
                 J[0:3, i] = z_i_minus_1
 
         return J
-
-    def ik_position(self, target, q0=None, method='J_T', force=True, tol=1e-4, K=None, kd=0.001, max_iter=1000, viz=None):
-        """
-        (qf, ef, iter, reached_max_iter, status_msg) = arm.ik2(target, q0=None, method='jt', force=False, tol=1e-6, K=None)
-        Description:
-            Returns a solution to the inverse kinematics problem finding
-            joint angles corresponding to the position (x y z coords) of target
-
-        Args:
-            target: 3x1 numpy array that defines the target location. 
-
-            q0: length of initial joint coordinates, defaults to q=0 (which is
-            often a singularity - other starting positions are recommended)
-
-            method: String describing which IK algorithm to use. Options include:
-                - 'pinv': damped pseudo-inverse solution, qdot = J_dag * e * dt, where
-                J_dag = J.T * (J * J.T + kd**2)^-1
-                - 'J_T': jacobian transpose method, qdot = J.T * K * e
-
-            force: Boolean, if True will attempt to solve even if a naive reach check
-            determines the target to be outside the reach of the arm
-
-            tol: float, tolerance in the norm of the error in pose used as termination criteria for while loop
-
-            K: 3x3 numpy matrix. For both pinv and J_T, K is the positive definite gain matrix used for both. 
-
-            kd: is a scalar used in the pinv method to make sure the matrix is invertible. 
-
-            max_iter: maximum attempts before giving up.
-
-        Returns:
-            qf: 6x1 numpy matrix of final joint values. If IK fails to converge the last set
-            of joint angles is still returned
-
-            ef: 3x1 numpy vector of the final error
-
-            count: int, number of iterations
-
-            flag: bool, "true" indicates successful IK solution and "false" unsuccessful
-
-            status_msg: A string that may be useful to understanding why it failed. 
-        """
-        # Fill in q if none given, and convert to numpy array 
-        if isinstance(q0, np.ndarray):
-            q = q0
-        elif q0 == None:
-            q = np.array([0.0]*self.n)
-        else:
-            q = np.array(q0)
-
-        # initializing some variables in case checks below don't work
+        
+    def compute_robot_path(self, q_init, goal, obst_location, obst_radius, joint_limits):
+        # print(f"q_init: {q_init}")
+        # print(f"goal: {goal}")
+        # print(f"obst_location: {obst_location}")
+        # print(f"obst_radius: {obst_radius}")
+        # print(f"joint_limits: {joint_limits}")
+        # some initialization:
+        q_s = []
         error = None
         count = 0
-
-        # Try basic check for if the target is in the workspace.
-        # Maximum length of the arm is sum(sqrt(d_i^2 + a_i^2)), distance to target is norm(A_t)
         maximum_reach = 0
-        for i in range(self.n):  # Add max length of each link
-            maximum_reach = maximum_reach + np.sqrt(self.dh[i][1] ** 2 + self.dh[i][2] ** 2)
 
-        pt = target  # Find distance to target
-        target_distance = np.sqrt(pt[0] ** 2 + pt[1] ** 2 + pt[2] ** 2)
+        # Import constants:
+        max_iter=1000
+        tol=1e-4
+        K=np.eye(3)
+        kd=0.0001
+        dt=0.01
 
-        if target_distance > maximum_reach and not force:
-            print("WARNING: Target outside of reachable workspace!")
-            return q, error, count, False, "Failed: Out of workspace"
+        # Perform some checks:
+        if isinstance(q_init, np.ndarray):
+                    q = q_init
+        elif q_init == None:
+                q = np.zeros(1,4)
         else:
-            if target_distance > maximum_reach:
-                print("Target out of workspace, but finding closest solution anyway")
-            else:
-                print("Target passes naive reach test, distance is {:.1} and max reach is {:.1}".format(
+                q = np.array(q_init)
+
+        for i in range(self.n):  # Add max length of each link
+                maximum_reach = maximum_reach + np.sqrt(self.dh[i][1] ** 2 + self.dh[i][2] ** 2)
+
+        pt = goal  
+        target_distance = np.sqrt(pt[0] ** 2 + pt[1] ** 2 + pt[2] ** 2) # Find distance to target
+
+        if target_distance > maximum_reach:
+                print("WARNING: Target outside of reachable workspace!")
+                return q, error, count, False, "Failed: Out of workspace"
+        else:
+                if target_distance > maximum_reach:
+                    print("Target out of workspace, but finding closest solution anyway")
+                else:
+                    print("Target passes naive reach test, distance is {:.1} and max reach is {:.1}".format(
                     float(target_distance), float(maximum_reach)))
 
-        if not isinstance(K, np.ndarray):
-            return q, error, count, False,  "No gain matrix 'K' provided"
+        # Some functions for cleanliness:
+        def get_error(q, point, index=None):
+                cur_position = self.fk(q=q, index=index)[0:3,3]
+                e = point-cur_position
+                return e
 
-        def damped_pseudo_inverse_method(jacobian, kd):
+        def midpoint_error(q, point, index1=[0,0], index2=None):
+                joint1 = self.fk(q=q, index=index1)
+                joint2 = self.fk(q=q, index=index2)
+                midpoint = (joint1[0:3,3] + joint2[0:3,3])/2
+                e = point - midpoint
+                # print('join1', joint1)
+                # print('joint2', joint2)
+                # print('midpoint', midpoint)
+                # print('e', e)
+                return e
+
+        def get_fr(nu=0.2, envelope=0.2, kr=0.2, er_r=[]):
+                if nu < envelope:
+                    fr = (kr/nu**4) * np.gradient(er_r)
+                else:
+                    fr = er_r*0.0
+                return fr
+
+        # Find initial errors:
+        er_a = get_error(q,pt) # distance from tip to goal
+        er_r1 = get_error(q,obst_location) # distance from tip to object
+        er_r2 = get_error(q,obst_location,index=[0,3]) # distance from last revolute joint to object
+        er_r3 = midpoint_error(q, obst_location, index1=[0,2], index2=[0,3]) # distance from midpoint on 2nd link to object
+        er_r4 = get_error(q, obst_location, index=[0,2]) # distance from first revolute joint to object
+        er_r5 = get_error(q, [0, 0, 0]) # distance from tip to base1
+        er_r6 = get_error(q, [0, 0, 0.1]) # distance from tip to base2
+
+        # Generate q_s using Artificial Potential Field method:
+        while np.linalg.norm(er_a) > tol and count < max_iter: 
+                J = self.jacob(q)[0:3,:]
+                
+                # Generate Attractive Field
+                ka = 0.5
+                fa = ka * er_a
+
+                # Generate Repulsive Field for object
+                nu1 = np.linalg.norm(er_r1) - obst_radius
+                nu2 = np.linalg.norm(er_r2) - obst_radius
+                nu3 = np.linalg.norm(er_r3) - obst_radius
+                nu4 = np.linalg.norm(er_r4) - obst_radius
+                nu5 = np.linalg.norm(er_r5) - obst_radius
+                nu6 = np.linalg.norm(er_r6) - obst_radius
+
+
+                if self.fk(q_init)[2,3] < goal[2]:
+                    fr1 = get_fr(nu=nu1, envelope=0.3, kr=0.6, er_r=er_r1)
+                    fr2 = get_fr(nu=nu2, envelope=0.2, kr=0.6, er_r=er_r2)
+                    fr3 = get_fr(nu=nu3, envelope=0.2, kr=0.3, er_r=er_r3)
+                    fr4 = get_fr(nu=nu4, envelope=0.2, kr=0.6, er_r=er_r4)
+                    fr5 = get_fr(nu=nu5, envelope=0.2, kr=0.6, er_r=er_r5)
+                    fr6 = get_fr(nu=nu6, envelope=0.2, kr=0.6, er_r=er_r6)
+
+                else:
+                    fr1 = get_fr(nu=nu1, envelope=0.3, kr=0.6, er_r=er_r1)
+                    fr2 = get_fr(nu=nu2, envelope=0.3, kr=0.6, er_r=er_r2)
+                    fr3 = get_fr(nu=nu3, envelope=0.4, kr=0.3, er_r=er_r3)
+                    fr4 = get_fr(nu=nu4, envelope=0.2, kr=0.6, er_r=er_r4)
+                    fr5 = get_fr(nu=nu5, envelope=0.2, kr=0.6, er_r=er_r5)
+                    fr6 = get_fr(nu=nu6, envelope=0.2, kr=0.6, er_r=er_r6)
+                
+                # Calculate next q
+                error = fa + fr1 + fr2 + fr3 + fr4 # + fr5 + fr6  # sum of attractive and repulsive fields
+                if (self.fk(q=q)[2,3] + error[2]) < 0: # if the EE is about to go under the floor,
+                    error[2] = 0 # set the z-velocity equal to zero
+                Ker = K @ error
+                qdot = J.T @ np.linalg.inv((J@J.T) + (kd**2*np.eye(3))) @ Ker  # use 'pinv' method
+                q = q + qdot*dt
+
+                # make sure q stays within joint limits
+                for i in range(len(q)):
+                    if q[i] <= (joint_limits[i][0]+5):
+                            q[i] = joint_limits[i][0]+5
+                    elif q[i] >= (joint_limits[i][1]-5):
+                            q[i] = joint_limits[i][1]-5
+                
+                # Update errors
+                er_a = get_error(q,pt)
+                er_r1 = get_error(q,obst_location)
+                er_r2 = get_error(q,obst_location,index=[0,3])
+                er_r3 = midpoint_error(q, obst_location, index1=[0,2], index2=[0,3])
+                er_r4 = get_error(q, obst_location, index=[0,2])
+                er_r5 = get_error(q, [0, 0, 0]) # distance from tip to base1
+                er_r6 = get_error(q, [0, 0, 0.1]) # distance from tip to base2
+
+                count = count+1
+                q_s.append(q)
+                
+        q_og = pd.DataFrame(q_s)
+        q_smooth = np.zeros([1000,4])
+        for i in range(len(q_smooth.T)):
+                q_smooth[:,i] = signal.savgol_filter(q_og[i], 501, 6)
+        q_out = np.array(q_smooth)
+        
+        return q_out     
             
-            J_dagger = jacobian.T @ np.linalg.inv((jacobian @ jacobian.T + kd * np.eye(3)))
-            return J_dagger
-        
-        current_pose = self.fk(q)[0:3,3]
-        error = target - current_pose
-
-        while np.linalg.norm(error) > tol and count < max_iter:
-        
-        # In this while loop you will update q for each iteration, and update, then
-        # your error to see if the problem has converged. You may want to print the error
-        # or the "count" at each iteration to help you see the progress as you debug. 
-        # You may even want to plot an arm initially for each iteration to make sure 
-        # it's moving in the right direction towards the target. 
-
-            # print(f"self.jacob(q): {self.jacob(q)}")
-            jacobian = self.jacob(q)[0:3]
-
-            if method == 'pinv':
-                q_dot_desired = damped_pseudo_inverse_method(jacobian, kd) @ error # Damped Pseudo-inverse Method
-            if method == 'J_T':
-                # print(f"K: {K}")
-                # print(f"jacobian.T: {jacobian.T}")
-                q_dot_desired = jacobian.T @ K  @ error# Jacobian Transpose Method
-
-            # print(f"q_dot_desired: {q_dot_desired}")
-            # print(f"q: {q}")
-            q_next = q + q_dot_desired
-
-            if viz != None:
-                viz.update(q_next)
-                # time.sleep(1)
-
-            q = q_next
-
-            current_pose = self.fk(q_next)[0:3,3]
-            error = target - current_pose
-            count += 1
-
-
-        return (q, error, count, count < max_iter, 'No errors noted')
-
 
 def testing():
     # Create a test function that connects to the hardware and is able to receive input form user over the console to send it to the robot
