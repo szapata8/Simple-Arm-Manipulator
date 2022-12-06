@@ -364,7 +364,7 @@ class VizScene:
 
 
 class ArmPlayer:
-    def __init__(self, arm:RobotArm):
+    def __init__(self, arm:RobotArm, targets, obstacles, obstacle_radii):
         if QApplication.instance() is None:
             self.app = pg.QtGui.QApplication([])
         else:
@@ -372,6 +372,10 @@ class ArmPlayer:
         self.window = QMainWindow()
         self.window.setGeometry(200, 300, 1000, 700)
         self.window.setWindowTitle("Robot Arm Control")
+
+        self.targets = targets # IK targets
+        self.obstacles = obstacles # IK Obstacles
+        self.obstacle_radii = obstacle_radii
 
         self.main_layout = QHBoxLayout()
         w1 = gl.GLViewWidget()
@@ -433,6 +437,14 @@ class ArmPlayer:
         self.view_last_command_button = view_last_command_button
         w2.addWidget(view_last_command_button)
 
+        # GENERATE PATH BUTTON PROPERTIES
+        path_to_target_button = QPushButton()
+        path_to_target_button.setText("Generate Path to Target")
+        path_to_target_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        path_to_target_button.pressed.connect(self.generate_path_to_target)
+        self.path_to_target_button = path_to_target_button
+        w2.addWidget(path_to_target_button)
+
         self.main_layout.addWidget(w1, stretch=3)
         self.main_layout.addLayout(w2, stretch=1)
 
@@ -445,6 +457,25 @@ class ArmPlayer:
         self.app.processEvents()
 
         self.app.exec_()
+
+    def generate_path_to_target(self):
+        print(f"Calculating path to target...")
+        # Grab current state of arm
+        q_current = [0, 0, 0, 0] # This will change depending on what our initial position is. 0 is just a magic number
+        q_list = self.arm_hardware.compute_robot_path(q_init=q_current, goal=self.targets[0], obst_location=self.obstacles, obst_radius=self.obstacle_radii, joint_limits=self.arm_hardware.joint_limits)
+        print(f"PATH TO TARGET CALCULATED! Number of steps: {len(q_list)}")
+        print(f"Target position sent to ArmPlayer: {q_list[-1]}")
+
+        # Update slider values
+        for i, z in enumerate(zip(self.slider_list, q_list[-1])):
+            s, q1 = z[0], z[1]
+            q = q1
+            s.setValue(q)
+            self.slider_label_list[i].setText(f"Joint {i + 1}: {q} degrees")
+
+        # Update ArmMesh object
+        self.arm_mesh.update(q_list[-1])
+
 
     def update_sliders(self):
         qs = np.zeros((self.n,))
