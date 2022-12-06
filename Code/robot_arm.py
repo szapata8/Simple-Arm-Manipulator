@@ -13,6 +13,7 @@ BAUD_RATE = 9600
 ESP32_ID = "PID=10C4:EA60"
 INITIALIZE_HARDWARE_MSG = "INIT"
 INITIALIZATION_MESSAGE_LENGTH = 40
+COMPENSATION_DEGREES = [0, 0, -3, -13, 15]
 
 def find_esp32_port():
     ports = list(serial.tools.list_ports.comports())
@@ -158,6 +159,7 @@ class RobotArm:
         return response
 
     def update_hardware_q(self, q, verbose=False):
+
         print(f"q command received: {q}")
         if self.microcontroller_serial_handle == None:
             print("ERROR: Serial handle not available. Initialize serial connection first.")
@@ -167,6 +169,13 @@ class RobotArm:
         q_updated = [int(q[0]/2), int(q[0]/2)]
         for index in range(1,len(q)):
             q_updated.append(int(q[index])) # Skip the first term since it's already been included
+        
+        # Compensate to get to 0
+        for i in range(len(q_updated)):
+            q_updated[i] += COMPENSATION_DEGREES[i]
+            if q_updated[i] < 0:
+                q_updated[i] = 0
+
         print(f"q_updated: {q_updated}")
         hw_response = self.send_serial_instruction(q_updated)
 
