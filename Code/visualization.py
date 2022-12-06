@@ -464,6 +464,7 @@ class ArmPlayer:
         q_current = [0, 0, 0, 0] # This will change depending on what our initial position is. 0 is just a magic number
         q_list = self.arm_hardware.compute_robot_path(q_init=q_current, goal=self.targets[0], obst_location=self.obstacles, obst_radius=self.obstacle_radii, joint_limits=self.arm_hardware.joint_limits)
         print(f"PATH TO TARGET CALCULATED! Number of steps: {len(q_list)}")
+        print(f"q_list: \n{q_list}")
         print(f"Target position sent to ArmPlayer: {q_list[-1]}")
 
         # Update slider values
