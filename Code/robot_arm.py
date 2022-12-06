@@ -312,11 +312,11 @@ class RobotArm:
         return J
         
     def compute_robot_path(self, q_init, goal, obst_location, obst_radius, joint_limits):
-        # print(f"q_init: {q_init}")
-        # print(f"goal: {goal}")
-        # print(f"obst_location: {obst_location}")
-        # print(f"obst_radius: {obst_radius}")
-        # print(f"joint_limits: {joint_limits}")
+        print(f"q_init: {q_init}")
+        print(f"goal: {goal}")
+        print(f"obst_location: {obst_location}")
+        print(f"obst_radius: {obst_radius}")
+        print(f"joint_limits: {joint_limits}")
         # some initialization:
         q_s = []
         error = None
