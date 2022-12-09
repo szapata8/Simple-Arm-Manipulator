@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import time
 from numpy import sqrt, sin, cos
 from numpy.linalg import norm
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSlider, QPushButton,
@@ -364,7 +365,7 @@ class VizScene:
 
 
 class ArmPlayer:
-    def __init__(self, arm:RobotArm, targets, obstacles, obstacle_radii):
+    def __init__(self, arm:RobotArm, target, obstacles, obstacle_radii):
         if QApplication.instance() is None:
             self.app = pg.QtGui.QApplication([])
         else:
@@ -373,7 +374,7 @@ class ArmPlayer:
         self.window.setGeometry(200, 300, 1000, 700)
         self.window.setWindowTitle("Robot Arm Control")
 
-        self.targets = targets # IK targets
+        self.target = target # IK targets
         self.obstacles = obstacles # IK Obstacles
         self.obstacle_radii = obstacle_radii
 
@@ -461,27 +462,41 @@ class ArmPlayer:
     def generate_path_to_target(self):
         print(f"Calculating path to target...")
         # Grab current state of arm
-        q_current = [0, 0, 0, 0] # This will change depending on what our initial position is. 0 is just a magic number
-        q_list = self.arm_hardware.compute_robot_path(q_init=q_current, goal=self.targets[0], obst_location=self.obstacles, obst_radius=self.obstacle_radii, joint_limits=self.arm_hardware.joint_limits)
+        q_current = [0, 0, 0, np.pi/2] # This will change depending on what our initial position is. 0 is just a magic number
+        q_list = self.arm_hardware.compute_robot_path(q_init=q_current, goal=self.target, obst_location=self.obstacles, obst_radius=self.obstacle_radii, joint_limits=self.arm_hardware.joint_limits)
         print(f"PATH TO TARGET CALCULATED! Number of steps: {len(q_list)}")
-        print(f"q_list: \n{q_list}")
-        print(f"Target position sent to ArmPlayer: {q_list[-1]}")
+        # print(f"q_list: \n{q_list}")
+        # print(f"Target position sent to ArmPlayer: {q_list[-1]}")
 
         # Update slider values
         for i, z in enumerate(zip(self.slider_list, q_list[-1])):
             s, q1 = z[0], z[1]
-            q = q1
+            q = int(q1 * 180/np.pi)
             s.setValue(q)
             self.slider_label_list[i].setText(f"Joint {i + 1}: {q} degrees")
 
         # Update ArmMesh object
         self.arm_mesh.update(q_list[-1])
 
+        # Update hardware with path from qs in the trajectory computed
+        for i, q_step in enumerate(q_list):
+            if i%10 == 0:
+                # print(f"unconverted q for trajectory: {q_step}")
+                q_step_converted = [converted_joint_step * (180/np.pi) for converted_joint_step in q_step]
+                for i in range(len(q_step_converted)):
+                    if i==0:
+                        q_step_converted[i] += 90 # Compensate for the base joint having -180 range
+                    q_step_converted[i] += 90 # Compensate for -90 range available in the slider but not available as a servo command
+                # print(f"converted q for trajectory: {q_step_converted}")
+                self.arm_hardware.update_hardware_q(q_step_converted, verbose=True)
+                time.sleep(0.3)
+
 
     def update_sliders(self):
         qs = np.zeros((self.n,))
         for i, s in enumerate(self.slider_list):
             q = s.value()
+            # print(f"slider value: {q}")
             qs[i] = q * np.pi / 180
             self.slider_label_list[i].setText(f"Joint {i + 1}: {q} degrees")
         self.arm_mesh.update(qs)
