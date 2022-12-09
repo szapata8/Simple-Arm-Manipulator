@@ -15,7 +15,7 @@ BAUD_RATE = 9600
 ESP32_ID = "PID=10C4:EA60"
 INITIALIZE_HARDWARE_MSG = "INIT"
 INITIALIZATION_MESSAGE_LENGTH = 40
-COMPENSATION_DEGREES = [0, -5, -3, -13, 12]
+COMPENSATION_DEGREES = [-6, -6, -3, -13, 12]
 
 def find_esp32_port():
     ports = list(serial.tools.list_ports.comports())
